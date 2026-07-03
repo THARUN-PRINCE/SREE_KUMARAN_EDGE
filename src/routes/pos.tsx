@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { ref, push } from "firebase/database";
 import { usePos, BRANCH_LABELS, buildReceiptHtml, nextBillNo, type SaleItem } from "@/lib/pos-store";
-import { supabase } from "@/integrations/supabase/client";
+import { db } from "@/lib/firebase";
 import { AppHeader } from "@/components/pos/AppHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -90,23 +91,54 @@ function PosScreen() {
   const hasEmptyCakeNote = cart.some((i) => i.isCustomCake && !i.customNote?.trim());
   const canCheckout = cart.length > 0 && !hasEmptyCakeNote && !submitting;
 
-import { ref, push } from "firebase/database";
-import { db } from "@/lib/firebase"; // Path correct-aa irukka?
+  const checkout = async () => {
+    if (!canCheckout || !user) return;
+    setSubmitting(true);
+    try {
+      const billNo = nextBillNo(branch);
+      const outletLabel = BRANCH_LABELS[branch];
+      const salePayload = {
+        branch,
+        cashier: user.email,
+        items: cart,
+        subtotal,
+        tax,
+        total,
+      };
 
-const checkout = async () => {
-  // ...
-  try {
-    const printRef = ref(db, 'print_jobs');
-    await push(printRef, {  // Inga dhaan data Firebase-kku pogum
-      receipt_html: receiptHtml,
-      status: "pending",
-      timestamp: Date.now()
-    });
-    console.log("Data pushed to Firebase!"); // Idhu console-la vandha, database-la vizhum
-  } catch (err) {
-    console.error("Error:", err);
-  }
-};
+      recordSale(salePayload);
+
+      const receiptHtml = buildReceiptHtml({
+        sale: salePayload,
+        outletLabel,
+        cashier: user.label || user.email,
+        billNo,
+      });
+
+      const printRef = ref(db, "print_jobs");
+      console.log("Pushing to Firebase print_jobs:", { outletLabel, billNo });
+      
+      const pushResult = await push(printRef, {
+        receipt_html: receiptHtml,
+        outlet_name: outletLabel,
+        status: "pending",
+        created_at: new Date().toISOString(),
+        timestamp: Date.now(),
+      });
+
+      console.log("Firebase push successful, key:", pushResult.key);
+
+      setCart([]);
+      setTendered(null);
+      toast.success(`Bill #${billNo} queued for printing`);
+    } catch (err) {
+      console.error("Checkout error:", err);
+      console.error("Error details:", JSON.stringify(err, null, 2));
+      toast.error(`Failed to queue print job: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
